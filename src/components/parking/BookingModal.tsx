@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, MapPin, Clock, CreditCard, QrCode, Check, Minus, Plus, Loader2 } from "lucide-react";
+import { X, MapPin, CreditCard, QrCode, Check, Minus, Plus, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ParkingSlotRelation } from "@/pages/Search";
+// 1. IMPORT YOUR SUPABASE CLIENT INSTANCE HERE
+import { supabase } from "@/lib/supabaseClient"; 
 
 interface BookingModalProps {
   spot: ParkingSlotRelation | null;
@@ -22,7 +24,6 @@ export function BookingModal({ spot, isOpen, onClose }: BookingModalProps) {
 
   // Safe extractions from the relational DB model
   const locationName = spot.parking_locations?.name || "Premium Parking Spot";
-  const locationAddress = spot.parking_locations?.address || "Address unavailable";
   const hourlyRate = spot.hourly_rate;
   
   // Pricing logic handling base rates
@@ -42,36 +43,32 @@ export function BookingModal({ spot, isOpen, onClose }: BookingModalProps) {
         const start_time = now.toISOString();
         const end_time = new Date(now.getTime() + duration * 60 * 60 * 1000).toISOString();
 
-        // 2. Package the data to match your SQL columns exactly
-        const bookingData = {
-          user_id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", // Replace with actual logged-in user UUID later
-          slot_id: spot.id, // Maps to the UUID primary key of your parking slot
-          start_time: start_time,
-          end_time: end_time,
-          vehicle_type: "Four-Wheeler", // Dynamic text value
-          vehicle_plate: vehicleNumber.trim(), // Stripped out text for safety
-          total_amount: grandTotal, // Dynamic total calculated above
-          status: "confirmed" // Custom enum token
-        };
+        // 2. Perform direct insert via Supabase client library
+        const { data, error } = await supabase
+          .from("bookings")
+          .insert([
+            {
+              user_id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", // Placeholder auth UUID mapping
+              slot_id: spot.id,
+              start_time: start_time,
+              end_time: end_time,
+              vehicle_type: "Four-Wheeler",
+              vehicle_plate: vehicleNumber.trim(),
+              total_amount: grandTotal,
+              status: "confirmed"
+            }
+          ])
+          .select();
 
-        // 3. POST the payload to your API endpoint
-        const response = await fetch("/api/bookings", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(bookingData),
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to save booking to database");
+        if (error) {
+          throw error;
         }
 
-        // Move to ticket receipt step if database accepted insertion
+        // Move to ticket receipt step if Supabase transaction completes successfully
         setStep("confirmation");
-      } catch (error) {
-        console.error("Booking Error:", error);
-        alert("Could not process booking. Please verify connections.");
+      } catch (error: any) {
+        console.error("Booking Engine Database Error:", error);
+        alert(`Could not process booking: ${error.message || 'Check database constraints.'}`);
       } finally {
         setIsSubmitting(false);
       }
