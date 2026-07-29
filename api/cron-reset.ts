@@ -1,12 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Initialize Supabase using your environment variables
-const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || ''; 
+// Serverless environments use non-VITE variables for backend execution
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ''; 
+
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export async function GET(request: Request) {
-  // Optional: Security check to make sure it's actually Vercel calling it
+  // Security verification for Vercel Cron
   const authHeader = request.headers.get('authorization');
   if (process.env.NODE_ENV === 'production' && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return new Response(JSON.stringify({ success: false, message: 'Unauthorized' }), {
@@ -16,13 +17,15 @@ export async function GET(request: Request) {
   }
 
   try {
-    // 1. Find all bookings that are confirmed but have expired
     const now = new Date().toISOString();
+
+    // 1. Fetch bookings that have passed their end time and haven't been cleared yet
+    // (Adjust or remove the status filter depending on your schema)
     const { data: expiredBookings, error: fetchError } = await supabase
       .from('bookings')
-      .select('slot_id')
-      .eq('status', 'confirmed')
-      .lt('end_time', now);
+      .select('id, slot_id')
+      .lt('end_time', now)
+      .neq('status', 'expired'); // Prevents picking up already handled entries
 
     if (fetchError) throw fetchError;
 
@@ -33,21 +36,30 @@ export async function GET(request: Request) {
       });
     }
 
-    // 2. Extract unique slot IDs that need to be freed up
+    // 2. Map target IDs
     const slotIdsToFree = [...new Set(expiredBookings.map((b: any) => b.slot_id))];
+    const bookingIdsToClear = expiredBookings.map((b: any) => b.id);
 
-    // 3. Update those specific parking slots to available = true
-    const { error: updateError } = await supabase
+    // 3. Free up the parking slots
+    const { error: slotUpdateError } = await supabase
       .from('parking_slots')
       .update({ is_available: true })
       .in('id', slotIdsToFree);
 
-    if (updateError) throw updateError;
+    if (slotUpdateError) throw slotUpdateError;
+
+    // 4. Mark the bookings as expired so they cycle out of the next cron run
+    const { error: bookingUpdateError } = await supabase
+      .from('bookings')
+      .update({ status: 'expired' })
+      .in('id', bookingIdsToClear);
+
+    if (bookingUpdateError) throw bookingUpdateError;
 
     return new Response(
       JSON.stringify({ 
         success: true, 
-        message: `Successfully released ${slotIdsToFree.length} expired slots.` 
+        message: `Successfully released ${slotIdsToFree.length} slots from ${bookingIdsToClear.length} bookings.` 
       }), 
       {
         status: 200,
@@ -56,7 +68,7 @@ export async function GET(request: Request) {
     );
 
   } catch (error: any) {
-    return new Response(JSON.stringify({ success: false, error: error.message }), {
+    return new Response(JSON.stringify({ success: false, error: error.message || error }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });

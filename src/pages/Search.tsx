@@ -96,8 +96,98 @@ export default function SearchPage() {
     }
   };
 
+  // Initial Data Fetch
   useEffect(() => {
     fetchParkingData();
+  }, []);
+
+  // Supabase Realtime Listener Setup
+  // useEffect(() => {
+  //   const channel = supabase
+  //     .channel("realtime-search-updates")
+  //     .on(
+  //       "postgres_changes",
+  //       {
+  //         event: "UPDATE", // Listens for database updates
+  //         schema: "public",
+  //         table: "parking_slots",
+  //       },
+  //       async (payload) => {
+  //         console.log("Realtime slot modification intercepted:", payload.new);
+
+  //         const updatedSlot = payload.new as any;
+
+  //         // Hydrate the relational data if it's missing from the pure table payload
+  //         if (!updatedSlot.parking_locations) {
+  //           const { data } = await supabase
+  //             .from("parking_slots")
+  //             .select("parking_locations(id, name, address, city)")
+  //             .eq("id", updatedSlot.id)
+  //             .single();
+            
+  //           if (data) {
+  //             updatedSlot.parking_locations = data.parking_locations;
+  //           }
+  //         }
+
+  //         // Merge updates into state array
+  //         setParkingSlots((currentSlots) =>
+  //           currentSlots.map((slot) =>
+  //             slot.id === updatedSlot.id 
+  //               ? { ...slot, ...updatedSlot } 
+  //               : slot
+  //           )
+  //         );
+  //       }
+  //     )
+  //     .subscribe();
+
+  //   return () => {
+  //     supabase.removeChannel(channel);
+  //   };
+  // }, []);
+
+  // Supabase Realtime Listener Setup
+  useEffect(() => {
+    const channel = supabase
+      .channel("realtime-search-updates")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "parking_slots",
+        },
+        (payload) => {
+          console.log("Realtime raw payload:", payload.new);
+
+          setParkingSlots((currentSlots) => {
+            // 1. Create a shallow copy of the array to guarantee React intercepts the state modification
+            const updatedArray = currentSlots.map((slot) => {
+              // 2. Use loose equality (==) in case one ID is a string and the other is an integer
+              if (slot.id == payload.new.id) {
+                console.log(`Matched slot match found for ID: ${slot.id}. Updating availability status.`);
+                
+                return {
+                  ...slot,
+                  // Explicitly ensure the incoming boolean updates correctly
+                  is_available: payload.new.is_available === true || payload.new.is_available === "true"
+                };
+              }
+              return slot;
+            });
+
+            return updatedArray;
+          });
+        }
+      )
+      .subscribe((status) => {
+        console.log("Supabase Realtime subscription status changed to:", status);
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const handleSpotSelect = (spot: ParkingSlotRelation) => {
@@ -269,7 +359,6 @@ export default function SearchPage() {
                         totalSpots={location.totalSpots}
                         availableSpots={location.availableSpots}
                         onBookNext={() => {
-                          // Pass down the first free slot from the array to lock onto a valid UUID row
                           if (location.availableSlotsList.length > 0) {
                             handleSpotSelect(location.availableSlotsList[0]);
                           }
