@@ -43,7 +43,7 @@ export function BookingModal({ spot, isOpen, onClose }: BookingModalProps) {
         const start_time = now.toISOString();
         const end_time = new Date(now.getTime() + duration * 60 * 60 * 1000).toISOString();
 
-        // 2. Perform direct insert via Supabase client library
+        // 2. Perform direct insert into the bookings table
         const { data, error } = await supabase
           .from("bookings")
           .insert([
@@ -60,12 +60,29 @@ export function BookingModal({ spot, isOpen, onClose }: BookingModalProps) {
           ])
           .select();
 
-        if (error) {
-          throw error;
-        }
+        if (error) throw error;
 
-        // Move to ticket receipt step if Supabase transaction completes successfully
+        // 3. Move UI to confirmation screen so the ticket receipt displays instantly
         setStep("confirmation");
+
+        // 4. Update the specific parking slot availability status in the background
+        setTimeout(async () => {
+          try {
+            const { error: slotUpdateError } = await supabase
+              .from("parking_slots") // Matches your schema's exact table name
+              .update({ is_available: false }) // Flags this slot as occupied post-booking
+              .eq("id", spot.id);
+
+            if (slotUpdateError) {
+              console.error("Delayed Slot Availability Mismatch Failure:", slotUpdateError);
+            } else {
+              console.log("Slot set to unavailable successfully after receipt generation!");
+            }
+          } catch (slotErr) {
+            console.error("Error executing post-receipt slot availability update:", slotErr);
+          }
+        }, 100);
+
       } catch (error: any) {
         console.error("Booking Engine Database Error:", error);
         alert(`Could not process booking: ${error.message || 'Check database constraints.'}`);
